@@ -9,11 +9,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
+	"github.com/chainguard-dev/registry-redirect/pkg/logger"
 	"github.com/chainguard-dev/registry-redirect/pkg/redirect"
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
@@ -49,11 +51,23 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Minimum severity of the messages that the logger will log:
+	// info, warning, error and fatal
+	logCfg := &logger.MyLoggingConfig{
+		Level: "info",
+	}
+
+	ctx, syslogger, err := logger.SetupLogging(ctx, logCfg, "dagger-registry-2023-01-23")
+	if err != nil {
+		panic(err)
+	}
+
 	logger := logging.FromContext(ctx)
 
 	go func() {
 		oscall := <-c
 		logger.Infof("system call:%+v", oscall)
+		syslogger.Close()
 		cancel()
 	}()
 
@@ -77,8 +91,9 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 	}
 	logger.Info("http server starting...")
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%s", port),
-		Handler: nil,
+		Addr:        fmt.Sprintf(":%s", port),
+		Handler:     nil,
+		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 	go func() {
 		if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
