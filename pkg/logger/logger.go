@@ -3,7 +3,7 @@ package logger
 import (
 	"context"
 	"encoding/json"
-	"log/syslog"
+	"fmt"
 
 	"github.com/chainguard-dev/registry-redirect/pkg/syslogger"
 	"go.uber.org/zap"
@@ -11,62 +11,65 @@ import (
 	"knative.dev/pkg/logging"
 )
 
-type MyLoggingConfig struct {
-	Level string
-}
-
-// Convert log level string to syslog priority
-func (m *MyLoggingConfig) levelToSyslogPriority(level string) syslog.Priority {
-	switch level {
-	case "debug":
-		return syslog.LOG_DEBUG
-	case "info":
-		return syslog.LOG_INFO
-	case "warn":
-		return syslog.LOG_WARNING
-	case "error":
-		return syslog.LOG_ERR
-	case "dpanic", "panic", "fatal":
-		return syslog.LOG_CRIT
-	default: // Default to info level if no level has been configured
-		return syslog.LOG_INFO
-	}
+type Config struct {
+	Level     string
+	Component string
+	Protocol  string
+	Address   string
 }
 
 // Convert custom logging config to Knative logging config
-func (m *MyLoggingConfig) customConfigToKnativeConfig(logCfg *MyLoggingConfig) *logging.Config {
+// only Level is processed
+func (c *Config) customConfigToKnativeConfig() (*logging.Config, error) {
 	var knativeCfg logging.Config
-	bytes, _ := json.Marshal(logCfg)
-	_ = json.Unmarshal(bytes, &knativeCfg)
-	return &knativeCfg
+	bytes, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %v", err)
+	}
+	err = json.Unmarshal(bytes, &knativeCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal into knative config: %v", err)
+	}
+	return &knativeCfg, nil
 }
 
-func SetupLogging(ctx context.Context, logCfg *MyLoggingConfig, component string) (context.Context, *syslogger.SyslogWriter, error) {
-	syslogPriority := logCfg.levelToSyslogPriority(logCfg.Level) | syslog.LOG_LOCAL0
-
-	// Setup syslog
-	syslogWriter, err := syslogger.NewSyslogWriter(syslogPriority, component)
+// NewLogger creates a new logger with the given configuration.
+func NewLogger(ctx context.Context, cfg *Config) (context.Context, *syslogger.SyslogWriter, error) {
+	syslogWriter, err := syslogger.NewSyslogWriter(cfg.Level, cfg.Protocol, cfg.Address, cfg.Component)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Convert custom logging config to Knative logging config
-	knativeCfg := logCfg.customConfigToKnativeConfig(logCfg)
+	knativeCfg, err := cfg.customConfigToKnativeConfig()
+	if err != nil {
+		return nil, nil, err
+	}
 
-	// Setup zap logger
-	logger, atomicLevel := logging.NewLoggerFromConfig(knativeCfg, component)
+	// Create a new Zap logger and atomic level from Knative logging config
+	zapLogger, atomicLevel := logging.NewLoggerFromConfig(knativeCfg, cfg.Component)
 
-	// Combine syslog and zap logger
-	baseLogger := logger.Desugar()
+	// Convert zapLogger from sugared logger to base logger, which is faster and not prone to some of the common mistakes that can be made with sugared logger.
+	baseLogger := zapLogger.Desugar()
+
+	// Wrap the Core of baseLogger with a Core that writes to both the original Core and a new Core.
 	baseLogger = baseLogger.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
-		return zapcore.NewTee(core, zapcore.NewCore(
-			zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
-			zapcore.AddSync(syslogWriter),
-			atomicLevel,
-		))
+		// Create a new Core that writes to our SyslogWriter, uses JSON encoding, and has the same level as our original logger.
+		syslogCore := zapcore.NewCore(
+			zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()), // try this encoder, how does it behave ???
+			// zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), // use JSON encoding
+
+			zapcore.AddSync(syslogWriter), // write to SyslogWriter
+			atomicLevel,                   // same level as the original logger
+		)
+
+		// Combine the original Core and our new Core. Logs written to the resulting Core will be written to both Cores.
+		combinedCore := zapcore.NewTee(core, syslogCore)
+
+		return combinedCore
 	}))
 
-	// Update context with logger
+	// Update context with our combined logger. The logger is "sugared" again because it's typically more convenient to use.
 	ctx = logging.WithLogger(ctx, baseLogger.Sugar())
 
 	return ctx, syslogWriter, nil

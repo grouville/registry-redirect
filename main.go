@@ -53,9 +53,6 @@ func main() {
 
 	// Minimum severity of the messages that the logger will log:
 	// info, warning, error and fatal
-	logCfg := &logger.MyLoggingConfig{
-		Level: "info",
-	}
 
 	ctx, syslogger, err := logger.SetupLogging(ctx, logCfg, "dagger-registry-2023-01-23")
 	if err != nil {
@@ -67,13 +64,13 @@ func main() {
 	go func() {
 		oscall := <-c
 		logger.Infof("system call:%+v", oscall)
-		syslogger.Close()
 		cancel()
 	}()
 
 	if err := serve(ctx, logger); err != nil {
 		logger.Fatalf("failed to serve:+%v\n", err)
 	}
+	syslogger.Close()
 }
 
 func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {

@@ -6,22 +6,15 @@ import (
 	"sync"
 )
 
-// interface created for mocking `mock_syslogger.go`
-// used in logger/logger_test.go
-type SyslogWriterInterface interface {
-	Write(p []byte) (n int, err error)
-	Close() error
-}
-
-var _ SyslogWriterInterface = &SyslogWriter{}
-
 type SyslogWriter struct {
 	writer *syslog.Writer
 	mutex  sync.Mutex
 }
 
-func NewSyslogWriter(priority syslog.Priority, tag string) (*SyslogWriter, error) {
-	w, err := syslog.Dial("udp", "0.0.0.0:514", priority, tag)
+func NewSyslogWriter(level, protocol, address, tag string) (*SyslogWriter, error) {
+	logLevel := syslogLevel(level) | syslog.LOG_LOCAL0
+
+	w, err := syslog.Dial(protocol, address, logLevel, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +37,7 @@ func (sw *SyslogWriter) Write(p []byte) (n int, err error) {
 	return len, nil
 }
 
-// idempotent close
-// if the writer is already closed, this is a no-op
+// Idempotent close: if the writer is already closed, this is a no-op
 func (sw *SyslogWriter) Close() error {
 	sw.mutex.Lock()
 	defer sw.mutex.Unlock()
@@ -56,4 +48,22 @@ func (sw *SyslogWriter) Close() error {
 		return err
 	}
 	return nil
+}
+
+// Extract syslog priority from log level
+func syslogLevel(level string) syslog.Priority {
+	switch level {
+	case "debug":
+		return syslog.LOG_DEBUG
+	case "info":
+		return syslog.LOG_INFO
+	case "warn":
+		return syslog.LOG_WARNING
+	case "error":
+		return syslog.LOG_ERR
+	case "dpanic", "panic", "fatal":
+		return syslog.LOG_CRIT
+	default: // Default to info level if no level has been configured
+		return syslog.LOG_INFO
+	}
 }
