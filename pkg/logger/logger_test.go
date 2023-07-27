@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"testing"
 	"time"
@@ -13,6 +14,12 @@ import (
 
 	"knative.dev/pkg/logging"
 )
+
+var doneLogging chan struct{}
+
+func init() {
+	doneLogging = make(chan struct{})
+}
 
 func startMockSyslogServer(t *testing.T, messages chan string, done chan bool, wg *sync.WaitGroup, serverReady chan struct{}) {
 	listener, err := net.Listen("tcp", "localhost:1514")
@@ -27,64 +34,45 @@ func startMockSyslogServer(t *testing.T, messages chan string, done chan bool, w
 	go func() {
 		defer listener.Close()
 		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				t.Errorf("Error accepting connection: %s", err)
-				done <- true
+			select {
+			case <-doneLogging:
+				// Signal to stop logging and exit the function
 				return
-			}
-
-			buffer := make([]byte, 1024)
-			for {
-				// Set a deadline for the Read operation
-				conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-				n, err := conn.Read(buffer)
+			default:
+				conn, err := listener.Accept()
 				if err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						// If the deadline is reached, close the connection and break the loop
-						conn.Close()
-						break
-					}
-					if err == io.EOF {
-						done <- true
-						return
-					}
-					t.Errorf("Error reading from connection: %s", err)
+					t.Errorf("Error accepting connection: %s", err)
+					done <- true
 					return
 				}
-				// Send received log message to messages channel
-				messages <- string(buffer[:n])
-				// Reset the deadline here
-				conn.SetDeadline(time.Time{})
+
+				buffer := make([]byte, 1024)
+				for {
+					// Set a deadline for the Read operation
+					conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+					n, err := conn.Read(buffer)
+					if err != nil {
+						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+							// If the deadline is reached, close the connection and break the loop
+							conn.Close()
+							break
+						}
+						if err == io.EOF {
+							done <- true
+							return
+						}
+						t.Errorf("Error reading from connection: %s", err)
+						return
+					}
+					// Send received log message to messages channel
+					messages <- string(buffer[:n])
+					// Reset the deadline here
+					conn.SetDeadline(time.Time{})
+				}
 			}
 		}
 	}()
 }
-
-// func serverTest(ctx context.Context, logger *zap.SugaredLogger, wg *sync.WaitGroup) (*http.Server, error) {
-// 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-// 		logger.Info("request received") // using your syslog writer
-// 	})
-
-// 	port := "8080"
-// 	logger.Info("http server starting...")
-// 	srv := &http.Server{
-// 		Addr:        fmt.Sprintf(":%s", port),
-// 		Handler:     nil,
-// 		BaseContext: func(_ net.Listener) context.Context { return ctx },
-// 	}
-
-// 	go func() {
-// 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-// 			logger.Errorf("listen:%+s\n", err)
-// 		}
-// 		wg.Done()
-// 	}()
-
-// 	logger.Infof("http server listening on port: %s", port)
-
-// 	return srv, nil
-// }
 
 func TestServer(t *testing.T) {
 	// Initialize mock syslog server variables
@@ -105,10 +93,11 @@ func TestServer(t *testing.T) {
 		t.Fatal("timeout waiting for mock server to be ready")
 	}
 
-	// Set up syslog client
+	// Create a context with a cancel function
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // Ensure all paths cancel the context to prevent context leak
+	defer cancel()
 
+	// Set up syslog client
 	ctx, sw, err := NewLogger(ctx, &Config{
 		Level:     "info",
 		Component: "dagger-registry-2023-01-23",
@@ -118,21 +107,80 @@ func TestServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %s", err)
 	}
-	defer sw.Close()
 
-	log := logging.FromContext(ctx)
+	// Create a channel to signal that the HTTP server is ready to receive requests.
+	serverReady = make(chan struct{})
 
-	// Send multiple log entries
+	// Start the HTTP server in a separate goroutine
+	go func() {
+		// Initialize an HTTP server
+		srv := &http.Server{
+			Addr: fmt.Sprintf(":%d", 8080),
+		}
+
+		// Handle the HTTP request and log a message
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			log := logging.FromContext(ctx)
+			log.Info("request received") // using your syslog writer
+		})
+
+		// Start the HTTP server
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				t.Errorf("HTTP server error: %+s\n", err)
+			}
+		}()
+
+		// Signal that the server is ready to receive requests
+		close(serverReady)
+
+		// Wait for the server to finish its work (graceful shutdown)
+		<-ctx.Done()
+
+		// Shutdown the HTTP server gracefully
+		ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelShutdown()
+		if err := srv.Shutdown(ctxShutdown); err != nil {
+			t.Errorf("HTTP server shutdown error: %+s\n", err)
+		}
+	}()
+
+	// Send multiple log entries to the HTTP server concurrently
 	numLogEntries := 5
 	for i := 1; i <= numLogEntries; i++ {
-		log.Infof("This is log entry %d", i)
+		go func(i int) {
+			// Simulate some processing time for each log entry
+			time.Sleep(100 * time.Millisecond)
+			resp, err := http.Get("http://localhost:8080")
+			if err != nil {
+				t.Errorf("HTTP request error: %s", err)
+				return
+			}
+			defer resp.Body.Close()
+		}(i)
 	}
 
-	// Wait for all the messages to arrive at the mock server
+	// // Allow some time for logs to be processed by the syslog server
+	time.Sleep(1 * time.Second)
+
+	// Wait for the HTTP server to finish its work (graceful shutdown) and process any remaining log entries
+	wg.Wait()
+
+	// Introduce a small delay to allow the HTTP server to finish processing remaining logs
+	// time.Sleep(100 * time.Millisecond)
+
+	// _ = sw
+	sw.Close()
+
+	// Wait for mock syslog server to finish its work
+	<-done
+
+	// sw.Close()
+	// Ensure that all the messages have been received by the syslog server
 	for i := 1; i <= numLogEntries; i++ {
 		select {
 		case received := <-messages:
-			expectedPattern := fmt.Sprintf(`This is log entry %d`, i)
+			expectedPattern := fmt.Sprintf(`request received`)
 			matches, err := regexp.MatchString(expectedPattern, received)
 			if err != nil {
 				t.Errorf("Error matching log message: %s", err)
@@ -145,10 +193,4 @@ func TestServer(t *testing.T) {
 			t.Errorf("Timeout waiting for log message %d", i)
 		}
 	}
-
-	// Close the logger, triggering a graceful shutdown
-	sw.Close()
-
-	// Wait for mock syslog server to finish its work
-	<-done
 }

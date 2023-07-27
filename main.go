@@ -53,8 +53,14 @@ func main() {
 
 	// Minimum severity of the messages that the logger will log:
 	// info, warning, error and fatal
+	logCfg := logger.Config{
+		Level:     "info",
+		Component: "dagger-registry-2023-01-23",
+		Protocol:  "tcp",
+		Address:   "localhost:1514",
+	}
 
-	ctx, syslogger, err := logger.SetupLogging(ctx, logCfg, "dagger-registry-2023-01-23")
+	ctx, syslogger, err := logger.NewLogger(ctx, &logCfg)
 	if err != nil {
 		panic(err)
 	}
