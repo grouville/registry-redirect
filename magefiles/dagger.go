@@ -17,6 +17,7 @@ import (
 
 const (
 	// https://hub.docker.com/_/golang/tags?page=1&name=alpine
+	debianVersion = "buster-slim"
 	alpineVersion = "3.18"
 	goVersion     = "1.20"
 
@@ -26,9 +27,11 @@ const (
 	// https://hub.docker.com/r/flyio/flyctl/tags
 	flyctlVersion = "0.1.65"
 
-	appName          = "dagger-registry-2023-01-23"
+	appName          = "dagger-registry-2023-07-28"
 	appImageRegistry = "registry.fly.io"
 	binaryName       = "registry-redirect"
+	vectorURL        = "0.tcp.eu.ngrok.io"
+	vectorPort       = "16901"
 
 	InstancesToDeploy = "3"
 	// We want to avoid running multiple instances in the same region
@@ -227,7 +230,18 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 	ref := fmt.Sprintf("%s:%s", imageName(), gitSHA())
 
 	refWithSHA, err := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).
-		From(fmt.Sprintf("alpine:%s", alpineVersion)).
+		From(fmt.Sprintf("debian:%s", debianVersion)).
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "rsyslog", "bash"}).
+		WithExec([]string{"find", "/var/lib/apt/lists/", "-mindepth", "1", "-delete"}).
+		WithExec([]string{"rm", "-rf", "/var/lib/apt/lists/"}).
+		// forward logs to vector instance over TCP
+		WithNewFile("/etc/rsyslog.d/30-remote-forward.conf", dagger.ContainerWithNewFileOpts{
+			Contents: fmt.Sprintf(`*.* action(type="omfwd" target="%s" port="%s" protocol="tcp")`, vectorURL, vectorPort)}).
+		// disable imklog module, which is not available in containerized environments
+		WithExec([]string{
+			"sed", "-i", "s/module(load=\"imklog\")/#module(load=\"imklog\")/g", "/etc/rsyslog.conf",
+		}).
 		WithFile(fmt.Sprintf("/%s", binaryName), binary).
 		WithNewFile("/GIT_SHA", dagger.ContainerWithNewFileOpts{
 			Contents:    gitSHA(),
@@ -241,7 +255,8 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 			Contents:    buildURL(),
 			Permissions: 444,
 		}).
-		WithEntrypoint([]string{fmt.Sprintf("/%s", binaryName)}).
+		// WithEntrypoint([]string{fmt.Sprintf("/bin/bash", "-c", "service rsyslog start && ./%s 2> >(tee /dev/fd/2 | logger)", binaryName)}).
+		WithEntrypoint([]string{"/bin/bash", "-c", fmt.Sprintf("service rsyslog start && ./%s 2> >(tee /dev/fd/2 | logger)", binaryName)}).
 		WithRegistryAuth(appImageRegistry, "x", flyTokenSecret(c)).
 		Publish(ctx, ref)
 
