@@ -5,10 +5,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	"dagger.io/dagger"
 	"github.com/containers/image/v5/docker/reference"
@@ -18,17 +17,18 @@ import (
 
 const (
 	// https://hub.docker.com/_/golang/tags?page=1&name=alpine
-	alpineVersion = "3.17"
+	alpineVersion = "3.18"
 	goVersion     = "1.20"
 
 	// https://github.com/golangci/golangci-lint/releases
-	golangciLintVersion = "1.51.2"
+	golangciLintVersion = "1.53.3"
 
 	// https://hub.docker.com/r/flyio/flyctl/tags
-	flyctlVersion = "0.0.482"
+	flyctlVersion = "0.1.65"
 
-	binaryName = "registry-redirect"
-	_imageName = "registry.fly.io/dagger-registry-2023-01-23"
+	appName          = "dagger-registry-2023-01-23"
+	appImageRegistry = "registry.fly.io"
+	binaryName       = "registry-redirect"
 
 	InstancesToDeploy = "3"
 	// We want to avoid running multiple instances in the same region
@@ -36,100 +36,82 @@ const (
 	MaxInstancesPerRegion = "1"
 
 	// https://fly.io/docs/reference/regions/#fly-io-regions
-	Amsterdam = "ams"
-	Chicago   = "ord"
 	Paris     = "cdg"
 	Singapore = "sin"
 	Sunnyvale = "sjc"
 
 	// https://fly.io/docs/reference/configuration/#picking-a-deployment-strategy
-	DeployStrategy = "canary"
+	DeployStrategy = "rolling" // Required when MaxInstancesPerRegion set to 1
 )
 
 // golangci-lint
 func Lint(ctx context.Context) {
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	lint(ctx, d)
+	lint(ctx, c)
 }
 
-func lint(ctx context.Context, d *dagger.Client) {
-	exitCode, err := d.Container().
+func lint(ctx context.Context, c *dagger.Client) {
+	_, err := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).
 		From(fmt.Sprintf("golangci/golangci-lint:v%s-alpine", golangciLintVersion)).
-		WithMountedCache("/go/pkg/mod", d.CacheVolume("gomod")).
-		WithMountedDirectory("/src", sourceCode(d)).WithWorkdir("/src").
+		WithMountedCache("/go/pkg/mod", c.CacheVolume("gomod")).
+		WithMountedDirectory("/src", sourceCode(c)).WithWorkdir("/src").
 		WithExec([]string{"golangci-lint", "run", "--color", "always", "--timeout", "2m"}).
-		ExitCode(ctx)
-
+		Sync(ctx)
 	if err != nil {
-		panic(unavailableErr(err))
-	}
-
-	if exitCode != 0 {
-		panic(Exit{Code: exitCode, Error: err})
+		panic(err)
 	}
 }
 
 // go test
 func Test(ctx context.Context) {
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	test(ctx, d)
+	test(ctx, c)
 }
 
-func test(ctx context.Context, d *dagger.Client) {
-	exitCode, err := d.Container().
+func test(ctx context.Context, c *dagger.Client) {
+	_, err := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).
 		From(fmt.Sprintf("golang:%s-alpine%s", goVersion, alpineVersion)).
-		WithMountedDirectory("/src", sourceCode(d)).WithWorkdir("/src").
-		WithMountedCache("/go/pkg/mod", d.CacheVolume("gomod")).
+		WithMountedDirectory("/src", sourceCode(c)).WithWorkdir("/src").
+		WithMountedCache("/go/pkg/mod", c.CacheVolume("gomod")).
 		WithEnvVariable("CGO_ENABLED", "0").
 		WithExec([]string{"go", "test", "./..."}).
-		ExitCode(ctx)
+		Sync(ctx)
 
 	if err != nil {
-		panic(unavailableErr(err))
-	}
-
-	if exitCode != 0 {
-		panic(Exit{Code: exitCode, Error: err})
+		panic(err)
 	}
 }
 
 // binary artefact used in container image
 func Build(ctx context.Context) {
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	_ = build(ctx, d)
+	build(ctx, c)
 }
 
-func build(ctx context.Context, d *dagger.Client) *dagger.File {
+func build(ctx context.Context, c *dagger.Client) *dagger.File {
 	binaryPath := fmt.Sprintf("build/%s", binaryName)
 
-	buildBinary := d.Container().
+	buildBinary, err := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).
 		From(fmt.Sprintf("golang:%s-alpine%s", goVersion, alpineVersion)).
-		WithMountedDirectory("/src", sourceCode(d)).WithWorkdir("/src").
-		WithMountedCache("/go/pkg/mod", d.CacheVolume("gomod")).
-		WithExec([]string{"go", "build", "-o", binaryPath})
-
-	_, err := buildBinary.ExitCode(ctx)
+		WithMountedDirectory("/src", sourceCode(c)).WithWorkdir("/src").
+		WithMountedCache("/go/pkg/mod", c.CacheVolume("gomod")).
+		WithExec([]string{"go", "build", "-o", binaryPath}).
+		Sync(ctx)
 	if err != nil {
-		panic(createErr(err))
+		panic(err)
 	}
 
 	return buildBinary.File(binaryPath)
 }
 
-func sourceCode(d *dagger.Client) *dagger.Directory {
-	return d.Host().Directory(".", dagger.HostDirectoryOpts{
+func sourceCode(c *dagger.Client) *dagger.Directory {
+	return c.Host().Directory(".", dagger.HostDirectoryOpts{
 		Include: []string{
 			"LICENSE",
 			"README.md",
@@ -140,63 +122,20 @@ func sourceCode(d *dagger.Client) *dagger.Directory {
 	})
 }
 
-func deployConfig(d *dagger.Client) *dagger.File {
-	return d.Host().Directory(".", dagger.HostDirectoryOpts{
-		Include: []string{
-			"fly.toml",
-		},
-	}).File("fly.toml")
-}
-
-// Docker client with private registry
-func Auth(ctx context.Context) {
-	defer handleErr()
-
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	githubRef := os.Getenv("GITHUB_REF_NAME")
-	if githubRef == "main" {
-		flyctl := flyctlWithDockerConfig(ctx, d)
-		authDocker(ctx, d, flyctl)
-	} else {
-		fmt.Println("\n🐳 Docker auth runs only in CI, main branch")
-	}
-}
-
-func authDocker(ctx context.Context, d *dagger.Client, c *dagger.Container) {
-	hostDockerConfigDir := os.Getenv("DOCKER_CONFIG")
-	if hostDockerConfigDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			panic(readErr(err))
-		}
-		hostDockerConfigDir = filepath.Join(home, ".docker")
-	}
-	hostDockerClientConfig := filepath.Join(hostDockerConfigDir, "config.json")
-
-	_, err := c.File(".docker/config.json").Export(ctx, hostDockerClientConfig)
-	if err != nil {
-		panic(createErr(err))
-	}
-}
-
 // container image to private registry
 func Publish(ctx context.Context) {
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	publish(ctx, d)
+	publish(ctx, c)
 }
 
-func publish(ctx context.Context, d *dagger.Client) string {
-	binary := build(ctx, d)
+func publish(ctx context.Context, c *dagger.Client) string {
+	binary := build(ctx, c)
 
 	githubRef := os.Getenv("GITHUB_REF_NAME")
 	if githubRef == "main" {
-		return publishImage(ctx, d, binary)
+		return publishImage(ctx, c, binary)
 	} else {
 		fmt.Println("\n📦 Publishing runs only in CI, main branch")
 	}
@@ -206,100 +145,88 @@ func publish(ctx context.Context, d *dagger.Client) string {
 
 // zero-downtime deploy container image
 func Deploy(ctx context.Context) {
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	imageRef, err := hostEnv(ctx, d.Host(), "IMAGE_REF").Value(ctx)
-	if err != nil {
-		panic(misconfigureErr(err))
+	imageRef := os.Getenv("IMAGE_REF")
+	if imageRef == "" {
+		panic("IMAGE_REF env var must be set")
 	}
 
-	deploy(ctx, d, imageRef)
+	deploy(ctx, c, imageRef)
 }
 
-func deploy(ctx context.Context, d *dagger.Client, imageRef string) {
+func deploy(ctx context.Context, c *dagger.Client, imageRef string) {
 	githubRef := os.Getenv("GITHUB_REF_NAME")
 	if githubRef == "main" {
 		imageRefFlyValid, err := reference.ParseDockerRef(imageRef)
 		if err != nil {
-			panic(misconfigureErr(err))
+			panic(err)
 		}
 
-		flyctl := flyctlWithDockerConfig(ctx, d).
+		_, err = flyctl(c).
 			WithExec([]string{
-				"regions",
-				"set", Amsterdam, Chicago, Paris, Singapore, Sunnyvale,
+				"deploy", "--now",
+				"--image", imageRefFlyValid.String(),
+				"--ha=false", // we will be scaling this app in the next command
+				"--strategy", DeployStrategy,
 			}).
 			WithExec([]string{
 				"scale",
 				"count", InstancesToDeploy,
 				"--max-per-region", MaxInstancesPerRegion,
+				fmt.Sprintf("--region=%s,%s,%s", Sunnyvale, Paris, Singapore),
+				"--yes",
 			}).
-			WithExec([]string{
-				"deploy",
-				"--image", imageRefFlyValid.String(),
-				"--strategy", DeployStrategy,
-			})
-
-		exitCode, err := flyctl.ExitCode(ctx)
+			Sync(ctx)
 		if err != nil {
-			panic(unavailableErr(err))
-		}
-		if exitCode != 0 {
-			panic(Exit{Code: exitCode, Error: err})
+			panic(err)
 		}
 	} else {
 		fmt.Println("\n🎁 Deploying runs only in CI, main branch")
 	}
 }
 
-// [lints, tests, auths], builds, publishes & deploys a new version of the app
+// [lints, tests], builds, publishes & deploys a new version of the app
 func All(ctx context.Context) {
-	// TODO: re-use the same client, run in parallel with err.Go
-	mg.CtxDeps(ctx, Lint, Test, Auth)
+	mg.CtxDeps(ctx, Lint, Test)
 
-	defer handleErr()
+	c := daggerClient(ctx)
+	defer c.Close()
 
-	d := daggerClient(ctx)
-	defer d.Close()
-
-	imageRef := publish(ctx, d)
-	deploy(ctx, d, imageRef)
+	imageRef := publish(ctx, c)
+	deploy(ctx, c, imageRef)
 }
 
 // stream app logs
 func Logs(ctx context.Context) {
-	defer handleErr()
-
-	d := daggerClient(ctx)
-	defer d.Close()
+	c := daggerClient(ctx)
+	defer c.Close()
 
 	// This command does not return,
 	// therefore it will never be cached,
 	// and it can be run multiple times
-	_, err := flyctlWithDockerConfig(ctx, d).
+	_, err := flyctl(c).
 		WithExec([]string{"logs"}).
 		Stdout(ctx)
 
 	if err != nil {
-		panic(unavailableErr(err))
+		panic(err)
 	}
 }
 
 func daggerClient(ctx context.Context) *dagger.Client {
 	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stderr))
 	if err != nil {
-		panic(unavailableErr(err))
+		panic(err)
 	}
 	return client
 }
 
-func publishImage(ctx context.Context, d *dagger.Client, binary *dagger.File) string {
+func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) string {
 	ref := fmt.Sprintf("%s:%s", imageName(), gitSHA())
 
-	refWithSHA, err := d.Container().
+	refWithSHA, err := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).
 		From(fmt.Sprintf("alpine:%s", alpineVersion)).
 		WithFile(fmt.Sprintf("/%s", binaryName), binary).
 		WithNewFile("/GIT_SHA", dagger.ContainerWithNewFileOpts{
@@ -314,14 +241,12 @@ func publishImage(ctx context.Context, d *dagger.Client, binary *dagger.File) st
 			Contents:    buildURL(),
 			Permissions: 444,
 		}).
-		WithFile("/fly.toml", deployConfig(d), dagger.ContainerWithFileOpts{
-			Permissions: 444,
-		}).
 		WithEntrypoint([]string{fmt.Sprintf("/%s", binaryName)}).
+		WithRegistryAuth(appImageRegistry, "x", flyTokenSecret(c)).
 		Publish(ctx, ref)
 
 	if err != nil {
-		panic(unavailableErr(err))
+		panic(err)
 	}
 
 	return refWithSHA
@@ -366,30 +291,64 @@ func buildURL() string {
 	return buildURL
 }
 
-func flyctlWithDockerConfig(ctx context.Context, d *dagger.Client) *dagger.Container {
-	flyToken := hostEnv(ctx, d.Host(), "FLY_API_TOKEN").Secret()
-
-	flyctl := d.Container().
+func flyctl(c *dagger.Client) *dagger.Container {
+	c = c.Pipeline("flyctl")
+	flyctl := c.Container(dagger.ContainerOpts{Platform: dagger.Platform("linux/amd64")}).Pipeline("auth").
 		From(fmt.Sprintf("flyio/flyctl:v%s", flyctlVersion)).
-		WithSecretVariable("FLY_API_TOKEN", flyToken).
-		WithMountedFile("fly.toml", flyConfig(d)).
-		WithExec([]string{"auth", "docker"})
+		WithSecretVariable("FLY_API_TOKEN", flyTokenSecret(c)).
+		WithEnvVariable("RUN_AT", time.Now().String()).
+		WithNewFile("fly.toml", dagger.ContainerWithNewFileOpts{
+			Contents: fmt.Sprintf(`
+# https://fly.io/docs/reference/configuration/
+app = "%s"
+primary_region = "%s"
 
-	exitCode, err := flyctl.ExitCode(ctx)
+kill_signal = "SIGINT"
+# Wait these many seconds for existing connections to drain before hard killing
+kill_timeout = 30
 
-	if err != nil {
-		panic(createErr(err))
-	}
+[env]
+  PORT = "8080"
 
-	if exitCode != 0 {
-		panic(createErr(errors.New("Failed to add registry.fly.io as a Docker authenticated registry")))
-	}
+[experimental]
+  auto_rollback = true
+  cmd = ["-repo", "dagger"]
+
+[[services]]
+  http_checks = []
+  internal_port = 8080
+  processes = ["app"]
+  protocol = "tcp"
+  script_checks = []
+  [services.concurrency]
+    hard_limit = 1000
+    soft_limit = 800
+    type = "connections"
+
+  [[services.ports]]
+    force_https = true
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    grace_period = "1s"
+    interval = "5s"
+    restart_limit = 0
+    timeout = "4s"`, appName, Sunnyvale)})
 
 	return flyctl
 }
 
-func flyConfig(d *dagger.Client) *dagger.File {
-	return d.Host().Directory(".").File("fly.toml")
+func flyTokenSecret(c *dagger.Client) *dagger.Secret {
+	flyToken := os.Getenv("FLY_API_TOKEN")
+	if flyToken == "" {
+		panic("FLY_API_TOKEN env var must be set")
+	}
+	return c.SetSecret("FLY_API_TOKEN", flyToken)
 }
 
 func imageName() string {
@@ -398,49 +357,5 @@ func imageName() string {
 		return envImageURL
 	}
 
-	return _imageName
-}
-
-func hostEnv(ctx context.Context, host *dagger.Host, varName string) *dagger.HostVariable {
-	hostEnv := host.EnvVariable(varName)
-	hostEnvVal, err := hostEnv.Value(ctx)
-	if err != nil {
-		panic(readErr(err))
-	}
-	if hostEnvVal == "" {
-		panic(misconfigureErr(errors.New(fmt.Sprintf("💥 env var %s must be set\n", varName))))
-	}
-	return hostEnv
-}
-
-type Exit struct {
-	Code  int
-	Error error
-}
-
-func handleErr() {
-	if e := recover(); e != nil {
-		if exit, ok := e.(Exit); ok == true {
-			fmt.Fprintf(os.Stderr, "%s\nsysexits(3) error code %d\n", exit.Error.Error(), exit.Code)
-			os.Exit(exit.Code)
-		}
-		panic(e) // not an Exit, pass-through
-	}
-}
-
-// https://man.openbsd.org/sysexits
-func readErr(err error) Exit {
-	return Exit{Code: 65, Error: err}
-}
-
-func unavailableErr(err error) Exit {
-	return Exit{Code: 69, Error: err}
-}
-
-func createErr(err error) Exit {
-	return Exit{Code: 73, Error: err}
-}
-
-func misconfigureErr(err error) Exit {
-	return Exit{Code: 78, Error: err}
+	return fmt.Sprintf("%s/%s", appImageRegistry, appName)
 }
