@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/chainguard-dev/registry-redirect/pkg/logger"
@@ -55,9 +56,9 @@ func main() {
 	// info, warning, error and fatal
 	logCfg := logger.Config{
 		Level:     "info",
-		Component: "dagger-registry-2023-01-23",
+		Component: "dagger-registry-2023-07-28",
 		Protocol:  "tcp",
-		Address:   "localhost:1514",
+		Address:   "toto.localhost:16901", // 0.tcp.eu.ngrok.io:16901
 	}
 
 	ctx, syslogger, err := logger.NewLogger(ctx, &logCfg)
@@ -85,8 +86,9 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 	if *gcr {
 		host = "gcr.io"
 	}
+	wg := &sync.WaitGroup{}
 	r := redirect.New(host, *repo, *prefix)
-	http.Handle("/", r)
+	customHandler := NewCustomHandler(wg, r)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -95,7 +97,7 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 	logger.Info("http server starting...")
 	srv := &http.Server{
 		Addr:        fmt.Sprintf(":%s", port),
-		Handler:     nil,
+		Handler:     customHandler,
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 	go func() {
@@ -112,6 +114,9 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 		cancel()
 	}()
 
+	// Wait for in-flight requests to complete before shutting down
+	wg.Wait()
+
 	if err = srv.Shutdown(ctxShutDown); err != nil {
 		logger.Fatalf("http server shutdown failed:%+s", err)
 	}
@@ -121,6 +126,20 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 	if err == http.ErrServerClosed {
 		err = nil
 	}
-
 	return
+}
+
+type CustomHandler struct {
+	wg      *sync.WaitGroup
+	handler http.Handler
+}
+
+func NewCustomHandler(wg *sync.WaitGroup, handler http.Handler) *CustomHandler {
+	return &CustomHandler{wg: wg, handler: handler}
+}
+
+func (h *CustomHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.wg.Add(1)
+	defer h.wg.Done()
+	h.handler.ServeHTTP(w, r) // Call your original handler
 }

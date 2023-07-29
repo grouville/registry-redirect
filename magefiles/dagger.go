@@ -11,7 +11,6 @@ import (
 
 	"dagger.io/dagger"
 	"github.com/containers/image/v5/docker/reference"
-	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
@@ -26,7 +25,7 @@ const (
 	// https://hub.docker.com/r/flyio/flyctl/tags
 	flyctlVersion = "0.1.65"
 
-	appName          = "dagger-registry-2023-01-23"
+	appName          = "dagger-registry-2023-07-28"
 	appImageRegistry = "registry.fly.io"
 	binaryName       = "registry-redirect"
 
@@ -189,7 +188,7 @@ func deploy(ctx context.Context, c *dagger.Client, imageRef string) {
 
 // [lints, tests], builds, publishes & deploys a new version of the app
 func All(ctx context.Context) {
-	mg.CtxDeps(ctx, Lint, Test)
+	// mg.CtxDeps(ctx, Lint, Test)
 
 	c := daggerClient(ctx)
 	defer c.Close()

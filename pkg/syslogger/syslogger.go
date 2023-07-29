@@ -8,7 +8,7 @@ import (
 
 type SyslogWriter struct {
 	writer *syslog.Writer
-	mutex  sync.Mutex
+	mutex  sync.RWMutex
 }
 
 func NewSyslogWriter(level, protocol, address, tag string) (*SyslogWriter, error) {
@@ -23,8 +23,9 @@ func NewSyslogWriter(level, protocol, address, tag string) (*SyslogWriter, error
 
 // Send p to syslog and return the number of bytes written and any error encountered
 func (sw *SyslogWriter) Write(p []byte) (n int, err error) {
-	sw.mutex.Lock()
-	defer sw.mutex.Unlock()
+	// Read lock: we accept concurrent writes to the syslog writer
+	sw.mutex.RLock()
+	defer sw.mutex.RUnlock()
 
 	if sw.writer == nil {
 		return 0, fmt.Errorf("syslog writer is closed")
@@ -39,6 +40,9 @@ func (sw *SyslogWriter) Write(p []byte) (n int, err error) {
 
 // Idempotent close: if the writer is already closed, this is a no-op
 func (sw *SyslogWriter) Close() error {
+	// Write lock: we want to make sure that all concurrent writes are finished before closing the writer
+	// shall not happen, as we only close the writer when the application is shutting down, after sync.Waitgroup is done
+	// but performance cost is minimal, and it is useful for testing
 	sw.mutex.Lock()
 	defer sw.mutex.Unlock()
 
