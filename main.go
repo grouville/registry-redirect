@@ -114,12 +114,12 @@ func serve(ctx context.Context, logger *zap.SugaredLogger) (err error) {
 		cancel()
 	}()
 
-	// Wait for in-flight requests to complete before shutting down
-	wg.Wait()
-
 	if err = srv.Shutdown(ctxShutDown); err != nil {
 		logger.Fatalf("http server shutdown failed:%+s", err)
 	}
+
+	// Wait for in-flight requests to complete before shutting down
+	wg.Wait()
 
 	logger.Infof("http server shutdown gracefully")
 
