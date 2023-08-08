@@ -56,9 +56,9 @@ func main() {
 	// info, warning, error and fatal
 	logCfg := logger.Config{
 		Level:     "info",
-		Component: "dagger-registry-2023-07-28",
+		Component: os.Getenv("FLY_APP_NAME"),
 		Protocol:  "tcp",
-		Address:   "toto.localhost:16901", // 0.tcp.eu.ngrok.io:16901
+		Address:   "7.tcp.eu.ngrok.io:18985", // 0.tcp.eu.ngrok.io:16901
 	}
 
 	ctx, syslogger, err := logger.NewLogger(ctx, &logCfg)

@@ -2,11 +2,7 @@
 
 This guide provides the steps to test the Dagger-Registry Redirect application locally, focusing on recent improvements to the syslog.
 
-## Procedure
-
-Follow the steps below on different terminal instances:
-
-### Setting up Vector Configuration Locally
+### Run Vector Configuration Locally
 
 1. Install [Vector]((https://vector.dev/docs/setup/installation/)).
 2. Copy the following configuration and run it with Vector: vector --config vector.toml
@@ -14,8 +10,8 @@ Follow the steps below on different terminal instances:
 ```toml file=vector.toml
 [sources.my_syslog_source]
   type = "syslog"
-  mode = "udp"
-  address = "0.0.0.0:514"
+  mode = "tcp"
+  address = "0.0.0.0:12345"
 
 [transforms.my_filter]
   type = "filter"
@@ -31,6 +27,11 @@ contains(message, "dagger-registry-2023-01-23")
   target = "stdout"
   encoding.codec = "json"
 ```
+
+
+## Local Procedure
+
+Follow the steps below on different terminal instances:
 
 ### Modifying the Hosts File
 
@@ -63,4 +64,23 @@ To check the next logs, run the following Docker command (assuming the [equinix]
 
 ```shell
 docker pull toto.localhost/equinix-demo-day-2023:latest
+```
+
+## Fly Procedure
+
+### Deploy the app to FLY
+```shell
+cd magefiles && FLY_APP_NAME="dagger-registry-2023-07-28" FLY_API_TOKEN="$(flyctl auth token)" GITHUB_REF_NAME=main  go run ./main.go -w .. all
+```
+
+### Trigger logs
+
+To trigger the logs, run the following Docker command (assuming the [equinix](https://github.com/orgs/dagger/packages/container/package/equinix-demo-day-2023) package exists).
+
+1. Find the app name's hostname: https://fly.io/apps/dagger-registry-2023-07-28 in our case.
+
+2. Run below command:
+
+```shell
+docker pull dagger-registry-2023-07-28.fly.dev/equinix-demo-day-2023:latest
 ```
