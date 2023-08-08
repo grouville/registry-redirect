@@ -253,22 +253,6 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 	return refWithSHA
 }
 
-func syslogHost() string {
-	syslogHost := os.Getenv("SYSLOG_HOST")
-	if syslogHost == "" {
-		panic("SYSLOG_HOST env var must be set")
-	}
-	return syslogHost
-}
-
-func flyAppName() string {
-	flyAppName := os.Getenv("FLY_APP_NAME")
-	if flyAppName == "" {
-		panic("FLY_APP_NAME env var must be set")
-	}
-	return flyAppName
-}
-
 func gitSHA() string {
 	gitSHA := os.Getenv("GITHUB_SHA")
 	if gitSHA == "" {
@@ -366,6 +350,22 @@ func flyTokenSecret(c *dagger.Client) *dagger.Secret {
 		panic("FLY_API_TOKEN env var must be set")
 	}
 	return c.SetSecret("FLY_API_TOKEN", flyToken)
+}
+
+func syslogHost() string {
+	syslogHost := os.Getenv("SYSLOG_HOST")
+	if syslogHost == "" {
+		panic("SYSLOG_HOST env var must be set")
+	}
+	return syslogHost
+}
+
+func flyAppName() string {
+	flyAppName := os.Getenv("FLY_APP_NAME")
+	if flyAppName == "" {
+		panic("FLY_APP_NAME env var must be set")
+	}
+	return flyAppName
 }
 
 func imageName() string {
