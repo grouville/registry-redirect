@@ -52,13 +52,21 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	if os.Getenv("SYSLOG_HOST") == "" {
+		panic("SYSLOG_HOST env var not set")
+	}
+
+	if os.Getenv("FLY_APP_NAME") == "" {
+		panic("FLY_APP_NAME env var not set")
+	}
+
 	// Minimum severity of the messages that the logger will log:
 	// info, warning, error and fatal
 	logCfg := logger.Config{
 		Level:     "info",
 		Component: os.Getenv("FLY_APP_NAME"),
 		Protocol:  "tcp",
-		Address:   "7.tcp.eu.ngrok.io:18985", // 0.tcp.eu.ngrok.io:16901
+		Address:   os.Getenv("SYSLOG_HOST"),
 	}
 
 	ctx, syslogger, err := logger.NewLogger(ctx, &logCfg)

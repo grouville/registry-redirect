@@ -240,6 +240,8 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 			Contents:    buildURL(),
 			Permissions: 444,
 		}).
+		WithEnvVariable("SYSLOG_HOST", syslogHost()).
+		WithEnvVariable("FLY_APP_NAME", flyAppName()).
 		WithEntrypoint([]string{fmt.Sprintf("/%s", binaryName)}).
 		WithRegistryAuth(appImageRegistry, "x", flyTokenSecret(c)).
 		Publish(ctx, ref)
@@ -249,6 +251,22 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 	}
 
 	return refWithSHA
+}
+
+func syslogHost() string {
+	syslogHost := os.Getenv("SYSLOG_HOST")
+	if syslogHost == "" {
+		panic("SYSLOG_HOST env var must be set")
+	}
+	return syslogHost
+}
+
+func flyAppName() string {
+	flyAppName := os.Getenv("FLY_APP_NAME")
+	if flyAppName == "" {
+		panic("FLY_APP_NAME env var must be set")
+	}
+	return flyAppName
 }
 
 func gitSHA() string {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,33 +21,34 @@ import (
 type CustomHandler struct {
 	wg      *sync.WaitGroup
 	handler http.Handler
+	counter *int32
 }
 
-func NewCustomHandler(wg *sync.WaitGroup, handler http.Handler) *CustomHandler {
-	return &CustomHandler{wg: wg, handler: handler}
+func NewCustomHandler(wg *sync.WaitGroup, handler http.Handler, count *int32) *CustomHandler {
+	return &CustomHandler{wg: wg, handler: handler, counter: count}
 }
 
 func (h *CustomHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.wg.Add(1)
+	atomic.AddInt32(h.counter, 1)
+	defer atomic.AddInt32(h.counter, -1)
 	defer h.wg.Done()
 	h.handler.ServeHTTP(w, r)
 }
 
 // simple handler that logs the request
-// and sleeps for 5 seconds
-// to simulate a long running request
+// and timeouts to make sure the server is not blocked
+// We do that to simulate a long running request
 func makeLoggingHandler(ctx context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := logging.FromContext(ctx)
+
+		timeout := time.After(1 * time.Second)
 		select {
-		case <-time.After(5 * time.Second):
-			// simulate a long running request, in case ctx.Done() (srv.ShutdownServer)
-			// is not called fast enough
 		case <-ctx.Done():
-			break
-			// the context will be canceled when the server is shutting down
-			// this gives an exact timing of workload simulation
+		case <-timeout:
 		}
+
 		logger.Infof("Received request:%s %s", r.Method, r.URL) // use our logger to test concurrency
 	}
 }
@@ -121,9 +123,10 @@ func startHTTPServer(
 	ready chan<- struct{},
 	shutdownHTTP <-chan struct{},
 	shutdownSyslog chan<- struct{},
+	count *int32,
 ) {
 	var wg sync.WaitGroup
-	customHandler := NewCustomHandler(&wg, handler)
+	customHandler := NewCustomHandler(&wg, handler, count)
 	server := &http.Server{
 		Addr:    ":" + port,
 		Handler: customHandler,
@@ -137,8 +140,8 @@ func startHTTPServer(
 	}()
 
 	// Wait until the server is ready
-	timeout := time.After(5 * time.Second)           // Wait up to 5 seconds for server to start
-	ticker := time.NewTicker(100 * time.Millisecond) // Check every 100ms if server is ready
+	timeout := time.After(1 * time.Second)           // Timeout if server not ready
+	ticker := time.NewTicker(100 * time.Millisecond) // Checks periodically if server is ready
 	defer ticker.Stop()
 loop:
 	for {
@@ -203,15 +206,17 @@ func TestToto(t *testing.T) {
 	// init the server mux
 	cancelContext, cancel := context.WithCancel(ctx)
 
+	var countProcessedHTTPrequests int32 = 0
+
 	mux := http.NewServeMux()
 	handler := makeLoggingHandler(cancelContext)
 	mux.HandleFunc("/", handler)
 
-	go startHTTPServer(ctx, "8080", mux, httpReady, shutdownHTTP, shutdownSyslog)
+	go startHTTPServer(ctx, "8080", mux, httpReady, shutdownHTTP, shutdownSyslog, &countProcessedHTTPrequests)
 
 	<-httpReady // Wait until the http server is ready
 
-	// Send 100 requests to the http server
+	// Send requests to the http server
 	// almost at the same time
 	var wg sync.WaitGroup
 	for i := 0; i < amountOfMessages; i++ {
@@ -225,22 +230,18 @@ func TestToto(t *testing.T) {
 		}()
 	}
 
-	cancel()  // Cancel the context to stop the http server
-	wg.Wait() // Wait for all 100 requests to be sent
+	wg.Wait()                                                                // Wait for all requests to be sent
+	require.EqualValues(t, 0, atomic.LoadInt32(&countProcessedHTTPrequests)) // assert that all requests have been processed
+	cancel()                                                                 // Cancel the context to stop the http server
 
 	// Simulate shutdown signal while requests are still being processed
-	// As they have a 5s sleep, they will be processed at the same time as the shutdown signal
+	// they will be processed at the same time as the shutdown signal
 	// This is the feature that we test on the prod server: do we lose messages?
 	close(shutdownHTTP)
 
-	// Count received messages
-	count := 0
-	for range messages {
-		count++
-	}
-
-	require.EqualValues(t, count, amountOfMessages,
-		fmt.Sprintf("Expected %d messages, got %d", amountOfMessages, count),
+	// check that we received the expected amount of messages
+	require.EqualValues(t, amountOfMessages, len(messages),
+		fmt.Sprintf("Expected %d messages, got %d", amountOfMessages, len(messages)),
 	)
 	syslogger.Close()
 }
