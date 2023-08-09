@@ -171,7 +171,7 @@ func startHTTPServer(
 	return ready, shutdownHTTP, nil
 }
 
-func TestToto(t *testing.T) {
+func TestLoggerGraceFulShutDown(t *testing.T) {
 	defer leaktest.Check(t)() // Ensure all goroutines are shutdown
 
 	amountOfMessages := 10                          // amount of messages to send to the logger

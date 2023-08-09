@@ -10,7 +10,8 @@ import (
 func TestSyslogWriter(t *testing.T) {
 	// udp is ok in this test case:
 	// we just want to test if it works
-	sw, err := NewSyslogWriter("debug", "udp", "localhost:514", "test")
+	sw := NewSyslogWriter("debug", "udp", "localhost:514", "test")
+	err := sw.Connect()
 	require.NoError(t, err, "Unexpected error in NewSyslogWriter")
 
 	data := []byte("hello, world!")
@@ -29,7 +30,8 @@ func TestSyslogWriter(t *testing.T) {
 func TestSyslogWriterConcurrency(t *testing.T) {
 	// udp is ok in this test case:
 	// we just want to test if concurrency races
-	sw, err := NewSyslogWriter("debug", "udp", "localhost:514", "test")
+	sw := NewSyslogWriter("debug", "udp", "localhost:514", "test")
+	err := sw.Connect()
 	require.NoError(t, err, "Unexpected error in NewSyslogWriter")
 
 	data := []byte("hello, world!")

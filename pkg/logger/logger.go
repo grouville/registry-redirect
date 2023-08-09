@@ -35,9 +35,11 @@ func (c *Config) customConfigToKnativeConfig() (*logging.Config, error) {
 
 // NewLogger creates a new logger with the given configuration.
 func NewLogger(ctx context.Context, cfg *Config) (context.Context, *syslogger.SyslogWriter, error) {
-	syslogWriter, err := syslogger.NewSyslogWriter(cfg.Level, cfg.Protocol, cfg.Address, cfg.Component)
+	syslogWriter := syslogger.NewSyslogWriter(cfg.Level, cfg.Protocol, cfg.Address, cfg.Component)
+
+	err := syslogWriter.Connect() // connect to syslog server
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to connect to syslog server: %v", err)
 	}
 
 	// Convert custom logging config to Knative logging config
