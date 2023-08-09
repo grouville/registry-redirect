@@ -56,8 +56,8 @@ func NewLogger(ctx context.Context, cfg *Config) (context.Context, *syslogger.Sy
 	baseLogger = baseLogger.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 		// Create a new Core that writes to our SyslogWriter, uses JSON encoding, and has the same level as our original logger.
 		syslogCore := zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()), // try this encoder, how does it behave ???
-			// zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), // use JSON encoding
+			// zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()), // try this encoder, how does it behave ???
+			zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), // use JSON encoding
 
 			zapcore.AddSync(syslogWriter), // write to SyslogWriter
 			atomicLevel,                   // same level as the original logger
