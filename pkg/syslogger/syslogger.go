@@ -85,6 +85,9 @@ func (sw *SyslogWriter) Close() error {
 	sw.mutex.Lock()
 	defer sw.mutex.Unlock()
 
+	if sw.isClosed || sw.writer == nil {
+		return nil // Already closed
+	}
 	err := sw.writer.Close()
 	if err != nil {
 		return err
