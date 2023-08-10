@@ -11,6 +11,7 @@ import (
 
 	"dagger.io/dagger"
 	"github.com/containers/image/v5/docker/reference"
+	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
@@ -23,7 +24,7 @@ const (
 	golangciLintVersion = "1.53.3"
 
 	// https://hub.docker.com/r/flyio/flyctl/tags
-	flyctlVersion = "0.1.65"
+	flyctlVersion = "0.1.73"
 
 	appName          = "dagger-registry-2023-07-28"
 	appImageRegistry = "registry.fly.io"
@@ -40,7 +41,7 @@ const (
 	Ashburn   = "iad"
 
 	// https://fly.io/docs/reference/configuration/#picking-a-deployment-strategy
-	DeployStrategy = "rolling" // Required when MaxInstancesPerRegion set to 1
+	DeployStrategy = "bluegreen" // Required when MaxInstancesPerRegion set to 1
 )
 
 // golangci-lint
@@ -188,7 +189,7 @@ func deploy(ctx context.Context, c *dagger.Client, imageRef string) {
 
 // [lints, tests], builds, publishes & deploys a new version of the app
 func All(ctx context.Context) {
-	// mg.CtxDeps(ctx, Lint, Test)
+	mg.CtxDeps(ctx, Lint, Test)
 
 	c := daggerClient(ctx)
 	defer c.Close()
