@@ -241,8 +241,6 @@ func publishImage(ctx context.Context, c *dagger.Client, binary *dagger.File) st
 			Contents:    buildURL(),
 			Permissions: 444,
 		}).
-		WithEnvVariable("SYSLOG_HOST", syslogHost()).
-		WithEnvVariable("FLY_APP_NAME", flyAppName()).
 		WithEntrypoint([]string{fmt.Sprintf("/%s", binaryName)}).
 		WithRegistryAuth(appImageRegistry, "x", flyTokenSecret(c)).
 		Publish(ctx, ref)
@@ -310,7 +308,9 @@ kill_signal = "SIGINT"
 kill_timeout = 30
 
 [env]
+  APP_NAME = "%s"
   PORT = "8080"
+  SYSLOG_HOST = "%s"
 
 [experimental]
   auto_rollback = true
@@ -340,7 +340,7 @@ kill_timeout = 30
     grace_period = "1s"
     interval = "5s"
     restart_limit = 0
-    timeout = "4s"`, appName, Ashburn)})
+    timeout = "4s"`, appName, Ashburn, appName, syslogHost())})
 
 	return flyctl
 }
@@ -359,14 +359,6 @@ func syslogHost() string {
 		panic("SYSLOG_HOST env var must be set")
 	}
 	return syslogHost
-}
-
-func flyAppName() string {
-	flyAppName := os.Getenv("FLY_APP_NAME")
-	if flyAppName == "" {
-		panic("FLY_APP_NAME env var must be set")
-	}
-	return flyAppName
 }
 
 func imageName() string {

@@ -52,21 +52,23 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	if os.Getenv("SYSLOG_HOST") == "" {
-		panic("SYSLOG_HOST env var not set")
+	syslogHost := os.Getenv("SYSLOG_HOST")
+	if syslogHost == "" {
+		syslogHost = "127.0.0.1:514"
 	}
 
-	if os.Getenv("FLY_APP_NAME") == "" {
-		panic("FLY_APP_NAME env var not set")
+	appName := os.Getenv("APP_NAME")
+	if appName == "" {
+		appName = "registry-redirect"
 	}
 
 	// Minimum severity of the messages that the logger will log:
 	// info, warning, error and fatal
 	logCfg := logger.Config{
 		Level:     "info",
-		Component: os.Getenv("FLY_APP_NAME"),
+		Component: appName,
 		Protocol:  "tcp",
-		Address:   os.Getenv("SYSLOG_HOST"),
+		Address:   syslogHost,
 	}
 
 	ctx, syslogger, err := logger.NewLogger(ctx, &logCfg)
