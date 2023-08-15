@@ -188,7 +188,7 @@ func TestLoggerGraceFulShutDown(t *testing.T) {
 	// start the logger and http server
 	logCfg := Config{
 		Level:     "info",
-		Component: "dagger-registry-2023-07-28",
+		Component: "dagger-registry",
 		Protocol:  "tcp",
 		Address:   "127.0.0.1:16901",
 	}
