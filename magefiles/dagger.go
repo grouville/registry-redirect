@@ -30,6 +30,8 @@ const (
 	appImageRegistry = "registry.fly.io"
 	binaryName       = "registry-redirect"
 
+	syslogHost = "vector-2023-06-08.internal:514"
+
 	InstancesToDeploy = "3"
 	// We want to avoid running multiple instances in the same region
 	// If there are issues with one region, the whole service will be disrupted
@@ -340,7 +342,7 @@ kill_timeout = 30
     grace_period = "1s"
     interval = "5s"
     restart_limit = 0
-    timeout = "4s"`, appName, Ashburn, appName, syslogHost())})
+    timeout = "4s"`, appName, Ashburn, appName, syslogHost)})
 
 	return flyctl
 }
@@ -351,14 +353,6 @@ func flyTokenSecret(c *dagger.Client) *dagger.Secret {
 		panic("FLY_API_TOKEN env var must be set")
 	}
 	return c.SetSecret("FLY_API_TOKEN", flyToken)
-}
-
-func syslogHost() string {
-	syslogHost := os.Getenv("SYSLOG_HOST")
-	if syslogHost == "" {
-		panic("SYSLOG_HOST env var must be set")
-	}
-	return syslogHost
 }
 
 func imageName() string {

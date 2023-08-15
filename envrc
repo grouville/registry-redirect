@@ -1,4 +1,2 @@
-export FLY_APP_NAME=dagger-registry-2023-07-28
 export FLY_API_TOKEN="$(flyctl auth token)"
 export GITHUB_REF_NAME=main
-export SYSLOG_HOST=vector-2023-06-08.internal:514
