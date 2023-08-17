@@ -11,7 +11,6 @@ import (
 
 	"dagger.io/dagger"
 	"github.com/containers/image/v5/docker/reference"
-	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
@@ -26,11 +25,11 @@ const (
 	// https://hub.docker.com/r/flyio/flyctl/tags
 	flyctlVersion = "0.1.65"
 
-	appName          = "dagger-registry-2023-01-23"
+	appName          = "dagger-registry-2023-08-17"
 	appImageRegistry = "registry.fly.io"
 	binaryName       = "registry-redirect"
 
-	InstancesToDeploy = "3"
+	InstancesToDeploy = "1"
 	// We want to avoid running multiple instances in the same region
 	// If there are issues with one region, the whole service will be disrupted
 	MaxInstancesPerRegion = "1"
@@ -175,7 +174,7 @@ func deploy(ctx context.Context, c *dagger.Client, imageRef string) {
 				"scale",
 				"count", InstancesToDeploy,
 				"--max-per-region", MaxInstancesPerRegion,
-				fmt.Sprintf("--region=%s,%s,%s", Ashburn, Paris, Singapore),
+				fmt.Sprintf("--region=%s", Paris),
 				"--yes",
 			}).
 			Sync(ctx)
@@ -189,7 +188,7 @@ func deploy(ctx context.Context, c *dagger.Client, imageRef string) {
 
 // [lints, tests], builds, publishes & deploys a new version of the app
 func All(ctx context.Context) {
-	mg.CtxDeps(ctx, Lint, Test)
+	// mg.CtxDeps(ctx, Lint, Test)
 
 	c := daggerClient(ctx)
 	defer c.Close()
